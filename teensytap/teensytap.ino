@@ -18,6 +18,8 @@
   This is code designed to work with Teensyduino
   (i.e. the Arduino IDE software used to generate code you can run on Teensy)
 
+  Code modified in late 2020 in BRAMS by Alex Nieva to detect step synchronization.
+
  */
 
 #include <Audio.h>
@@ -510,4 +512,3 @@ void send_metronome_to_serial() {
 	  missed_frames);
   Serial.print(msg);
 }
-

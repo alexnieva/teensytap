@@ -2,6 +2,8 @@
 
 A framework for running sensorimotor synchronisation experiment. The framework is based on Teensy and the Audio Adapter, which are inexpensive and readily available for purchase at many retailers internationally. The code provided here will allow the Teensy to record finger tapping and deliver auditory feedback over headphones, optionally with a pre-specified delay, and simultaneously present metronome click sounds. Data is communicated to the computer via USB for offline analysis.
 
+**Note**: This branch implements data storage on the SDCard.
+
 [See the demonstration video!](https://youtu.be/WwA4infAf5g)
 
 ![alt text](misc/setup_photo_annotations.png "Setup example")

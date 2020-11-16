@@ -22,6 +22,9 @@
 
  */
 
+
+#include <SD.h>
+#include <SPI.h>
 #include <Audio.h>
 
 
@@ -30,7 +33,7 @@
 #include "AudioSampleMetronome.h"
 #include "AudioSampleEndsignal.h"
 
-#include "DeviceID.h"
+#include "DeviceID_custom.h"
 
 
 /*
@@ -43,11 +46,16 @@ boolean prev_active = false; // Whether we were active on the previous loop iter
 int fsrAnalogPin = 3; // FSR is connected to analog 3 (A3)
 int fsrReading;      // the analog reading from the FSR resistor divider
 
+// Definitions for the SD card
+//File myFile;
+const int chipSelect = 10;
+
+
 // For interpreting taps
-int tap_onset_threshold    = 20; // the FSR reading threshold necessary to flag a tap onset
-int tap_offset_threshold   = 10; // the FSR reading threshold necessary to flag a tap offset
-int min_tap_on_duration    = 20; // the minimum duration of a tap (in ms), this prevents double taps
-int min_tap_off_duration   = 40; // the minimum time between offset of one tap and the onset of the next taps, again this prevents double taps
+int tap_onset_threshold    = 600; // the FSR reading threshold necessary to flag a tap onset
+int tap_offset_threshold   = 500; // the FSR reading threshold necessary to flag a tap offset
+int min_tap_on_duration    = 200; // the minimum duration of a tap (in ms), this prevents double taps
+int min_tap_off_duration   = 200; // the minimum time between offset of one tap and the onset of the next taps, again this prevents double taps
 
 
 int tap_phase = 0; // The current tap phase, 0 = tap off (i.e. we are in the inter-tap-interval), 1 = tap on (we are within a tap)
@@ -151,6 +159,8 @@ const int CONFIG_LENGTH = 6*4; /* Defines the length of the configuration packet
 
 void setup(void) {
   /* This function will be executed once when we power up the Teensy */
+  SPI.setMOSI(7);  // Audio shield has MOSI on pin 7
+  SPI.setSCK(14);  // Audio shield has SCK on pin 14
   
   Serial.begin(baudrate);  // Initiate serial communication
   Serial.print("TeensyTap starting...\n");
@@ -167,6 +177,66 @@ void setup(void) {
   // sound can play simultaneously without clipping
   mix1.gain(0, 0.5);
   mix1.gain(1, 0.5);
+
+  // SD card setup stuff
+  Sd2Card card;
+  SdVolume volume;
+  File f1, f2, f3, f4;
+  char buffer[512];
+  boolean status;
+  unsigned long usec, usecMax;
+  elapsedMicros usecTotal, usecSingle;
+  int i, type;
+  float size;
+//  Serial.print("Initializing SD card...");
+//
+//  if (!SD.begin(chipSelect)) {
+//    Serial.println("initialization failed!");
+//    return;
+//  }
+//  Serial.println("initialization done.");
+  // First, detect the card
+  status = card.init(SPI_FULL_SPEED, chipSelect);
+  if (status) {
+    Serial.println("SD card is connected :-)");
+  } else {
+    Serial.println("SD card is not connected or unusable :-(");
+    return;
+  }
+
+  type = card.type();
+  if (type == SD_CARD_TYPE_SD1 || type == SD_CARD_TYPE_SD2) {
+    Serial.println("Card type is SD");
+  } else if (type == SD_CARD_TYPE_SDHC) {
+    Serial.println("Card type is SDHC");
+  } else {
+    Serial.println("Card is an unknown type (maybe SDXC?)");
+  }
+
+  // Then look at the file system and print its capacity
+  status = volume.init(card);
+  if (!status) {
+    Serial.println("Unable to access the filesystem on this card. :-(");
+    return;
+  }
+
+  size = volume.blocksPerCluster() * volume.clusterCount();
+  size = size * (512.0 / 1e6); // convert blocks to millions of bytes
+  Serial.print("File system space is ");
+  Serial.print(size);
+  Serial.println(" Mbytes.");
+
+  // Now open the SD card normally
+  status = SD.begin(chipSelect);
+  if (status) {
+    Serial.println("SD library is able to access the filesystem");
+  } else {
+    Serial.println("SD library can not access the filesystem!");
+    Serial.println("Please report this problem, with the make & model of your SD card.");
+    Serial.println("  http://forum.pjrc.com/forums/4-Suggestions-amp-Bug-Reports");
+  }
+
+
 
   Serial.print("TeensyTap ready.\n");
 
@@ -210,25 +280,25 @@ void do_activity() {
       // Currently we are in the tap-off phase (nothing was thouching the FSR)
       
       /* First, check whether actually anything is allowed to happen.
-	 For example, if a tap just happened then we don't allow another event,
-	 for example we don't want taps to occur impossibly close (e.g. within a few milliseconds
-	 we can't realistically have a tap onset and offset).
-	 Second, check whether this a new tap onset
+   For example, if a tap just happened then we don't allow another event,
+   for example we don't want taps to occur impossibly close (e.g. within a few milliseconds
+   we can't realistically have a tap onset and offset).
+   Second, check whether this a new tap onset
       */
       if ( (current_t > next_event_embargo_t) && (fsrReading>tap_onset_threshold)) {
 
-	// New Tap Onset
-	tap_phase = 1; // currently we are in the tap "ON" phase
-	tap_onset_t = current_t;
-	// don't allow an offset immediately; freeze the phase for a little while
-	next_event_embargo_t = current_t + min_tap_on_duration;
+  // New Tap Onset
+  tap_phase = 1; // currently we are in the tap "ON" phase
+  tap_onset_t = current_t;
+  // don't allow an offset immediately; freeze the phase for a little while
+  next_event_embargo_t = current_t + min_tap_on_duration;
 
-	// Schedule the next tap feedback time (if we deliver feedback)
-	if (metronome && metronome_clicks_played < metronome_nclicks_predelay) {
-	  next_feedback_t = current_t; // if we are in the pre-delay period, let's play the feedback sound immediately.
-	} else {
-	  next_feedback_t = current_t + auditory_feedback_delay;
-	}
+  // Schedule the next tap feedback time (if we deliver feedback)
+  if (metronome && metronome_clicks_played < metronome_nclicks_predelay) {
+    next_feedback_t = current_t; // if we are in the pre-delay period, let's play the feedback sound immediately.
+  } else {
+    next_feedback_t = current_t + auditory_feedback_delay;
+  }
       }
       
     } else if (tap_phase==1) {
@@ -236,30 +306,31 @@ void do_activity() {
       
       // Check whether the force we are currently reading is greater than the maximum force; if so, update the maximum
       if (fsrReading>tap_max_force) {
-	tap_max_force_t = current_t;
-	tap_max_force   = fsrReading;
+  tap_max_force_t = current_t;
+  tap_max_force   = fsrReading;
       }
       
       // Check whether this may be a tap offset
       if ( (current_t > next_event_embargo_t) && (fsrReading<tap_offset_threshold)) {
 
-	// New Tap Offset
-	
-	tap_phase = 0; // currently we are in the tap "OFF" phase
-	tap_offset_t = current_t;
-	
-	// don't allow an offset immediately; freeze the phase for a little while
-	next_event_embargo_t = current_t + min_tap_off_duration;
+  // New Tap Offset
+  
+  tap_phase = 0; // currently we are in the tap "OFF" phase
+  tap_offset_t = current_t;
+  
+  // don't allow an offset immediately; freeze the phase for a little while
+  next_event_embargo_t = current_t + min_tap_off_duration;
 
-	// Send data to the computer!
-	send_tap_to_serial();
+  // Send data to the computer!
+  send_tap_to_serial();
+  send_tap_to_sdCard();
 
-	// Clear information about the tap so that we are ready for the next tap to occur
-	tap_onset_t     = 0;
-	tap_offset_t    = 0;
-	tap_max_force   = 0;
-	tap_max_force_t = 0;
-	
+  // Clear information about the tap so that we are ready for the next tap to occur
+  tap_onset_t     = 0;
+  tap_offset_t    = 0;
+  tap_max_force   = 0;
+  tap_max_force_t = 0;
+  
       }
       
     }
@@ -272,17 +343,18 @@ void do_activity() {
     if (metronome && (metronome_clicks_played < metronome_nclicks_predelay + metronome_nclicks)) {
       if (current_t >= next_metronome_t) {
 
-	// Mark that we have another click played
-	metronome_clicks_played += 1;
+  // Mark that we have another click played
+  metronome_clicks_played += 1;
 
-	// Play metronome click
-	sound1.play(AudioSampleMetronome);
-	
-	// And schedule the next upcoming metronome click
-	next_metronome_t += metronome_interval;
-	
-	// Proudly tell the world that we have played the metronome click
-	send_metronome_to_serial();
+  // Play metronome click
+  sound1.play(AudioSampleMetronome);
+  
+  // And schedule the next upcoming metronome click
+  next_metronome_t += metronome_interval;
+  
+  // Proudly tell the world that we have played the metronome click
+  send_metronome_to_serial();
+  send_metronome_to_sdCard();
       }
     }
 
@@ -290,14 +362,15 @@ void do_activity() {
       
       if ((next_feedback_t != 0) && (current_t >= next_feedback_t)) {
 
-	// Play the auditory feedback (relating to the subject's tap)
-	sound0.play(AudioSampleTap);
+  // Play the auditory feedback (relating to the subject's tap)
+  sound0.play(AudioSampleTap);
 
-	// Clear the queue, nothing more to play
-	next_feedback_t = 0;
-	
-	// Proudly tell the world that we have played the tap sound
-	send_feedback_to_serial();
+  // Clear the queue, nothing more to play
+  next_feedback_t = 0;
+  
+  // Proudly tell the world that we have played the tap sound
+  send_feedback_to_serial();
+  send_feedback_to_sdCard();
       }
 
     }
@@ -333,6 +406,11 @@ void loop(void) {
     Serial.print(current_t);
     Serial.print("\n");
     
+    //Writing to the SD Card
+    char msg[50] = "";
+    sprintf(msg, "# Trial completed at t = %lu\n", current_t);
+    write_to_sdCard(msg);
+        
     running_trial = false;
   }
 
@@ -353,10 +431,16 @@ void loop(void) {
       Serial.print(current_t);
       Serial.print("\n");
 
+      //Writing to the SD Card
+      char msg[50] = "";
+      sprintf(msg, "# Start signal received at t = %lu\n", current_t);
+      write_to_sdCard(msg);
+    
+
       // Compute when this trial will end
       trial_end_t = current_t;
       if (metronome) {
-	trial_end_t += (metronome_nclicks_predelay+metronome_nclicks+1)*metronome_interval; // the +1 here is because from the start moment we will wait one metronome period until we actually start registering
+  trial_end_t += (metronome_nclicks_predelay+metronome_nclicks+1)*metronome_interval; // the +1 here is because from the start moment we will wait one metronome period until we actually start registering
       }
       trial_end_t   += (ncontinuation_clicks*metronome_interval);
       
@@ -368,7 +452,7 @@ void loop(void) {
       
       /* Okay, if we are playing a metronome then let's determine when to start. */
       if (metronome) {
-	next_metronome_t = current_t + metronome_interval;
+  next_metronome_t = current_t + metronome_interval;
       }
     }
     
@@ -376,6 +460,12 @@ void loop(void) {
       Serial.print("# Stop signal received at t=");
       Serial.print(current_t);
       Serial.print("\n");
+
+      //Writing to the SD Card
+      char msg[50] = "";
+      sprintf(msg, "# Stop signal received at t = %lu\n", current_t);
+      write_to_sdCard(msg);
+    
       active = false; // Put our activity on hold
     }
     
@@ -426,7 +516,9 @@ void read_config_from_serial() {
 
   Serial.print("# Config received...\n");
   send_config_to_serial();
+  send_config_to_sdCard();
   send_header();
+  send_header_to_sdCard();
 
   // Reset some of the other configuration parameters
   missed_frames           = 0;
@@ -446,26 +538,62 @@ void send_config_to_serial() {
   Serial.print  ("# Device installed ");
   Serial.println(DEVICE_ID);
   sprintf(msg, "# config AF=%i DELAY=%i METR=%i INTVL=%i NCLICK_PREDELAY=%i NCLICK=%i NCONT=%i\n",
-	  auditory_feedback,
-	  auditory_feedback_delay,
-	  metronome,
-	  metronome_interval,
-	  metronome_nclicks_predelay,
-	  metronome_nclicks,
-	  ncontinuation_clicks);
+    auditory_feedback,
+    auditory_feedback_delay,
+    metronome,
+    metronome_interval,
+    metronome_nclicks_predelay,
+    metronome_nclicks,
+    ncontinuation_clicks);
   Serial.print(msg);
 
 }
 
 
-
-
+void send_config_to_sdCard() {
+  /* Sends a dump of the current config to the SD card*/
+  char msg[200];
+  //msg_number += 1; // This is the next message
+//  Serial.print  ("# Device installed ");
+//  Serial.println(DEVICE_ID);
+  sprintf(msg, "# config AF=%i DELAY=%i METR=%i INTVL=%i NCLICK_PREDELAY=%i NCLICK=%i NCONT=%i\n",
+    auditory_feedback,
+    auditory_feedback_delay,
+    metronome,
+    metronome_interval,
+    metronome_nclicks_predelay,
+    metronome_nclicks,
+    ncontinuation_clicks);
+    write_to_sdCard(msg);
+}
 
 
 void send_header() {
   /* Sends information about the current tap to the PC through the serial interface */
   Serial.print("message_number type onset_t offset_t max_force_t max_force n_missed_frames\n");
-}  
+}
+
+void send_header_to_sdCard(){
+  char msg[200] = "message_number type onset_t offset_t max_force_t max_force n_missed_frames\n";
+  write_to_sdCard(msg);
+}
+
+void write_to_sdCard(char *msg){
+  // open the file.
+  File dataFile = SD.open("datalog.txt", FILE_WRITE);
+
+  // if the file is available, write to it:
+  if (dataFile) {
+    dataFile.println(msg);
+    dataFile.close();
+    // print to the serial port too:
+    //Serial.println(dataString);
+  }  
+  // if the file isn't open, pop up an error:
+  else {
+    Serial.println("error opening datalog.txt");
+  }  
+}
 
 
 void send_tap_to_serial() {
@@ -473,17 +601,29 @@ void send_tap_to_serial() {
   char msg[100];
   msg_number += 1; // This is the next message
   sprintf(msg, "%d tap %lu %lu %lu %d %d\n",
-	  msg_number,
-	  tap_onset_t,
-	  tap_offset_t,
-	  tap_max_force_t,
-	  tap_max_force,
-	  missed_frames);
+    msg_number,
+    tap_onset_t,
+    tap_offset_t,
+    tap_max_force_t,
+    tap_max_force,
+    missed_frames);
   Serial.print(msg);
   
 }
 
-
+void send_tap_to_sdCard(){
+  /* Sends information about the current tap to the SD card  */
+  char msg[100];
+  msg_number += 1; // This is the next message
+  sprintf(msg, "%d tap %lu %lu %lu %d %d\n",
+    msg_number,
+    tap_onset_t,
+    tap_offset_t,
+    tap_max_force_t,
+    tap_max_force,
+    missed_frames);
+  write_to_sdCard(msg);  
+}
 
 
 
@@ -493,22 +633,41 @@ void send_feedback_to_serial() {
   char msg[100];
   msg_number += 1; // This is the next message
   sprintf(msg, "%d feedback %lu NA NA NA %d\n",
-	  msg_number,
-	  current_t,
-	  missed_frames);
+    msg_number,
+    current_t,
+    missed_frames);
   Serial.print(msg);
 }
 
-
-
+void send_feedback_to_sdCard() {
+  /* Sends information about the current tap to the SD card */
+  char msg[100];
+  msg_number += 1; // This is the next message
+  sprintf(msg, "%d feedback %lu NA NA NA %d\n",
+    msg_number,
+    current_t,
+    missed_frames);
+  write_to_sdCard(msg);
+}
 
 void send_metronome_to_serial() {
   /* Sends information about the current tap to the PC through the serial interface */
   char msg[100];
   msg_number += 1; // This is the next message
   sprintf(msg, "%d click %lu NA NA NA %d\n",
-	  msg_number,
-	  current_t,
-	  missed_frames);
+    msg_number,
+    current_t,
+    missed_frames);
   Serial.print(msg);
+}
+
+void send_metronome_to_sdCard() {
+  /* Sends information about the current tap to the SD card */
+  char msg[100];
+  msg_number += 1; // This is the next message
+  sprintf(msg, "%d click %lu NA NA NA %d\n",
+    msg_number,
+    current_t,
+    missed_frames);
+  write_to_sdCard(msg);
 }
